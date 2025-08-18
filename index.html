@@ -69,13 +69,14 @@
       border-radius: 2px;
       width: 130px;
     }
-    #btnExport, #btnAdd {
+    #btnExport, #btnAdd, #btnExportDrive {
       margin-top: 15px; padding: 8px 14px;
       font-size: 14px; cursor: pointer;
       background-color: #2ecc71; color: white;
       border: none; border-radius: 4px;
     }
     #btnAdd { background-color: #f39c12; }
+    #btnExportDrive { background-color: #1abc9c; }
     .btnDelete {
       margin-left: auto;
       background-color: #e74c3c;
@@ -86,7 +87,12 @@
       font-size: 14px;
       flex-shrink: 0;
     }
+    .drive-config { margin-top: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .drive-config input { padding: 6px; font-size: 14px; width: 360px; }
+    .hint { font-size: 12px; color: #666; }
   </style>
+  <!-- Google 身分服務（OAuth 2.0） -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -97,7 +103,15 @@
 
 <div id="container"></div>
 <button id="btnAdd">➕ 新增欄位</button>
-<button id="btnExport">匯出 Word</button>
+<button id="btnExport">匯出 Word（下載）</button>
+<button id="btnExportDrive">匯出到 Google Drive</button>
+
+<div class="drive-config">
+  <input type="text" id="googleClientId" placeholder="在此填入 Google OAuth Client ID（必填）" />
+  <input type="text" id="driveFolderId" placeholder="（可選）指定 Google Drive 資料夾 ID" />
+  <span class="hint">提示：若不填資料夾 ID，檔案會存到雲端硬碟根目錄。</span>
+</div>
+
 <div id="popup2" class="popup"></div>
 <div id="popup3" class="popup"></div>
 
@@ -270,40 +284,21 @@
   document.getElementById('btnAdd').addEventListener('click', createGroup);
   createGroup();
 
-
-  document.getElementById('btnExport').addEventListener('click', async () => {
+  // === 將 docx 組裝與檔名產出封裝成函式，下載或上傳都可重用 ===
+  async function buildDocBlobAndName() {
     const children = [
       new Paragraph({
-        children: [
-          new TextRun({
-            text: "Arcanum Advanced Inc.",
-	    font: "Microsoft JhengHei UI",
-            size: 20,
-          }),
-        ],
+        children: [ new TextRun({ text: "Arcanum Advanced Inc.", font: "Microsoft JhengHei UI", size: 20 }) ],
         alignment: AlignmentType.RIGHT,
         spacing: { after: 0 },
       }),
       new Paragraph({
-        children: [
-          new TextRun({
-            text: "https://www.arcanum-adv.com",
-	    font: "Microsoft JhengHei UI",
-            size: 20,
-          }),
-        ],
+        children: [ new TextRun({ text: "https://www.arcanum-adv.com", font: "Microsoft JhengHei UI", size: 20 }) ],
         alignment: AlignmentType.RIGHT,
         spacing: { after: 300 },
       }),
       new Paragraph({
-        children: [
-          new TextRun({
-            text: '設備借出單',
-            bold: true,
-	    font: "Microsoft JhengHei UI",
-            size: 40
-          })
-        ],
+        children: [ new TextRun({ text: '設備借出單', bold: true, font: "Microsoft JhengHei UI", size: 40 }) ],
         spacing: { after: 300 },
         alignment: AlignmentType.CENTER
       })
@@ -353,7 +348,10 @@
       }));
     });
 
-    if (count === 0) return alert('沒有資料');
+    if (count === 0) {
+      alert('沒有資料');
+      return null;
+    }
 
     children.push(new Paragraph({}));
 
@@ -362,9 +360,7 @@
         { type: TabStopType.LEFT, position: 0 },
         { type: TabStopType.RIGHT, position: 9000 },
       ],
-      children: [
-        new TextRun({ text: `\t借方簽章：______________`, font: "Microsoft JhengHei UI", size: 32 }),
-      ],
+      children: [ new TextRun({ text: `\t借方簽章：______________`, font: "Microsoft JhengHei UI", size: 32 }) ],
       spacing: { before: 1000 }
     }));
 
@@ -374,22 +370,110 @@
       description: "借出內容",
       styles: {
         default: {
-          document: {
-            run: { font: "Microsoft JhengHei", size: 28 },
-            paragraph: { spacing: { line: 276 } }
-          }
+          document: { run: { font: "Microsoft JhengHei", size: 28 }, paragraph: { spacing: { line: 276 } } }
         }
       },
       sections: [{ properties: {}, children }]
     });
 
     const blob = await Packer.toBlob(doc);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
     const today = new Date();
     const formattedDate = today.toISOString().split('T')[0];
-    a.download = `設備借出單_${formattedDate}.docx`;
+    const filename = `設備借出單_${formattedDate}.docx`;
+
+    return { blob, filename };
+  }
+
+  // 原本的「下載」
+  document.getElementById('btnExport').addEventListener('click', async () => {
+    const built = await buildDocBlobAndName();
+    if (!built) return;
+    const { blob, filename } = built;
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
     a.click();
+  });
+
+  // === Google Drive 登入 + 上傳 ===
+  let tokenClient = null;
+  let accessToken = null;
+
+  function getClientId() {
+    const id = document.getElementById('googleClientId').value.trim();
+    if (!id) throw new Error('請先在欄位中填入 Google OAuth Client ID');
+    return id;
+  }
+
+  function requestAccessToken() {
+    return new Promise((resolve, reject) => {
+      try {
+        const clientId = getClientId();
+        if (!window.google || !google.accounts || !google.accounts.oauth2) {
+          return reject(new Error('Google 身分服務尚未載入，請稍後重試。'));
+        }
+        if (!tokenClient) {
+          tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope: 'https://www.googleapis.com/auth/drive.file',
+            callback: (resp) => {
+              if (resp && resp.access_token) {
+                accessToken = resp.access_token;
+                resolve(accessToken);
+              } else {
+                reject(new Error('無法取得存取權杖'));
+              }
+            },
+          });
+        }
+        tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  async function uploadToDrive(blob, filename, folderId) {
+    if (!accessToken) await requestAccessToken();
+
+    const metadata = { name: filename };
+    if (folderId) metadata.parents = [folderId];
+
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json; charset=UTF-8' }));
+    form.append('file', blob, filename);
+
+    const url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + accessToken },
+      body: form,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error('上傳失敗：' + text);
+    }
+    return res.json();
+  }
+
+  document.getElementById('btnExportDrive').addEventListener('click', async () => {
+    try {
+      const built = await buildDocBlobAndName();
+      if (!built) return;
+      const { blob, filename } = built;
+
+      const folderId = document.getElementById('driveFolderId').value.trim();
+      const file = await uploadToDrive(blob, filename, folderId || undefined);
+
+      alert(`已上傳至 Google Drive！\n檔名：${file.name}\n檔案ID：${file.id}`);
+      // 若需立刻開啟：window.open(file.webViewLink, '_blank');
+    } catch (err) {
+      console.error(err);
+      alert(err.message || '上傳過程發生錯誤');
+    }
   });
 </script>
 </body>
