@@ -86,6 +86,8 @@
       font-size: 14px;
       flex-shrink: 0;
     }
+    /* 新增：避免重複點擊時的視覺狀態 */
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -108,30 +110,29 @@
 <script>
   const { Document, Packer, Paragraph, TextRun, AlignmentType, TabStopType } = docx;
 
-  /* === 新增：上傳設定（使用你的 Web App exec URL 與 TOKEN） === */
+  /* 上傳設定（使用你的 Web App exec URL 與 TOKEN） */
   const ENDPOINT = 'https://script.google.com/macros/s/AKfycbyMcAeH_ws6L5BISgTa-w84NBDKkPOiN-m9bMqKftKl4Hd4PPSQa-eVFSVvXuMKh2kL/exec';
   const TOKEN    = '124616442124';
 
-  /* === 新增：把 doc 轉 base64 後上傳到 Apps Script（不影響原本下載） === */
+  /* 將 doc 轉為 base64 上傳到 Apps Script（回傳 JSON，失敗丟出錯誤） */
   async function uploadDocx(doc, fileName) {
-    try {
-      const base64 = await Packer.toBase64String(doc);
-      const res = await fetch(ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // 避免 CORS 預檢
-        body: JSON.stringify({ _token: TOKEN, uploadDocx: { base64, name: fileName } })
-      });
-      const text = await res.text();
-      let json = {};
-      try { json = JSON.parse(text); } catch {}
-      if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      alert('已上傳到雲端！檔案ID：' + json.docxId);
-    } catch (err) {
-      console.error(err);
-      alert('上傳失敗（已完成本機下載）：' + err.message);
+    const base64 = await Packer.toBase64String(doc);
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // 避免 CORS 預檢
+      body: JSON.stringify({ _token: TOKEN, uploadDocx: { base64, name: fileName } })
+    });
+
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); }
+    catch (e) { throw new Error('伺服器回應非 JSON：' + text.slice(0, 200)); }
+
+    if (!json.ok) {
+      throw new Error(json.error || `HTTP ${res.status}`);
     }
+    return json; // 預期包含 { ok: true, docxId: '...' }
   }
-  /* === 新增到此結束 === */
 
   let groupIndex = 0;
   const container = document.getElementById('container');
@@ -295,39 +296,34 @@
   document.getElementById('btnAdd').addEventListener('click', createGroup);
   createGroup();
 
-
+  /* 主要變更：先上傳雲端，失敗才觸發本機下載；並在上傳期間 disable 按鈕與顯示狀態文字 */
   document.getElementById('btnExport').addEventListener('click', async () => {
+    const btn = document.getElementById('btnExport');
+    const originalText = btn.textContent;
+
+    // 避免重複點擊
+    btn.disabled = true;
+    btn.textContent = '上傳中...';
+
+    // 建立 doc 內容
     const children = [
       new Paragraph({
         children: [
-          new TextRun({
-            text: "Arcanum Advanced Inc.",
-	    font: "Microsoft JhengHei UI",
-            size: 20,
-          }),
+          new TextRun({ text: "Arcanum Advanced Inc.", font: "Microsoft JhengHei UI", size: 20 }),
         ],
         alignment: AlignmentType.RIGHT,
         spacing: { after: 0 },
       }),
       new Paragraph({
         children: [
-          new TextRun({
-            text: "https://www.arcanum-adv.com",
-	    font: "Microsoft JhengHei UI",
-            size: 20,
-          }),
+          new TextRun({ text: "https://www.arcanum-adv.com", font: "Microsoft JhengHei UI", size: 20 }),
         ],
         alignment: AlignmentType.RIGHT,
         spacing: { after: 300 },
       }),
       new Paragraph({
         children: [
-          new TextRun({
-            text: '設備借出單',
-            bold: true,
-	    font: "Microsoft JhengHei UI",
-            size: 40
-          })
+          new TextRun({ text: '設備借出單', bold: true, font: "Microsoft JhengHei UI", size: 40 })
         ],
         spacing: { after: 300 },
         alignment: AlignmentType.CENTER
@@ -335,14 +331,12 @@
     ];
 
     const borrowerName = document.getElementById('borrowerNameInput').value || '______________';
-
     children.push(new Paragraph({
       children: [new TextRun({ text: `借方：${borrowerName}`, font: "Microsoft JhengHei UI", size: 32 })],
       spacing: { after: 200 }
     }));
 
     let count = 0;
-
     selections.forEach((sel, idx) => {
       if (!sel) return;
       const group = container.querySelector(`.group[data-idx="${idx}"]`);
@@ -378,10 +372,14 @@
       }));
     });
 
-    if (count === 0) return alert('沒有資料');
+    if (count === 0) {
+      alert('沒有資料');
+      btn.disabled = false;
+      btn.textContent = originalText;
+      return;
+    }
 
     children.push(new Paragraph({}));
-
     children.push(new Paragraph({
       tabStops: [
         { type: TabStopType.LEFT, position: 0 },
@@ -408,18 +406,28 @@
       sections: [{ properties: {}, children }]
     });
 
-    const blob = await Packer.toBlob(doc);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
     const today = new Date();
     const formattedDate = today.toISOString().split('T')[0];
-    a.download = `設備借出單_${formattedDate}.docx`;
-    a.click();
+    const fileName = `設備借出單_${formattedDate}.docx`;
 
-    /* === 新增：下載後同步上傳到共用雲端硬碟 === */
-    const fileName = a.download;
-    uploadDocx(doc, fileName);
-    /* === 新增到此結束 === */
+    try {
+      // 先嘗試上傳雲端（成功就不下載）
+      const result = await uploadDocx(doc, fileName);
+      alert('已上傳到雲端！檔案ID：' + result.docxId);
+    } catch (err) {
+      // 上傳失敗才下載本機
+      console.error('上傳失敗，改為下載：', err);
+      const blob = await Packer.toBlob(doc);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName;
+      a.click();
+      alert('上傳失敗，已改為下載本機：' + err.message);
+    } finally {
+      // 還原按鈕狀態
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
   });
 </script>
 </body>
