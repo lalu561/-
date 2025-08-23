@@ -408,7 +408,9 @@
 
     const today = new Date();
     const formattedDate = today.toISOString().split('T')[0];
-    const fileName = `設備借出單_${formattedDate}.docx`;
+    const rawBorrower = document.getElementById('borrowerNameInput').value || '';
+    const safeBorrower = (rawBorrower.trim() || '未填借方').replace(/[\\\/:*?"<>|]/g, '');
+    const fileName = `設備借出單_${safeBorrower}_${formattedDate}.docx`;
 
     try {
       // 先嘗試上傳雲端（成功就不下載）
