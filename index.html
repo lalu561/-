@@ -86,7 +86,6 @@
       font-size: 14px;
       flex-shrink: 0;
     }
-    /* 新增：避免重複點擊時的視覺狀態 */
     button:disabled { opacity: 0.6; cursor: not-allowed; }
   </style>
 </head>
@@ -134,11 +133,7 @@
     return json; // 預期包含 { ok: true, docxId: '...' }
   }
 
-  let groupIndex = 0;
-  const container = document.getElementById('container');
-  const popup2 = document.getElementById('popup2');
-  const popup3 = document.getElementById('popup3');
-
+  /* === 選單資料 === */
   const categoryMap = {
     '設備': ['PC','Laptop','monitor','Lan switch box','BW scope','VNA','ECal','LCR meter'],
     '測試用具': ['40G D-Probe','20G D-Probe','SE Probe','DIFF Probe','FX-C7','SCR10'],
@@ -161,8 +156,35 @@
     '扭力扳手': ['MOUNTZ','PACKETMICRO','Luxshare-ICT'],
   };
 
-  const selections = [];
+  /* === 狀態與基本元素 === */
+  let groupIndex = 0;
+  const selections = []; // 每個 group: { level1, level2, level3 }
+  const container = document.getElementById('container');
+  const popup2 = document.getElementById('popup2'); // 第二層彈窗
+  const popup3 = document.getElementById('popup3'); // 第三層彈窗
+  let activeGroupIdx = null; // 目前開啟選單的 group 索引
 
+  /* === 工具函式 === */
+  function closePopups() {
+    popup2.style.display = 'none';
+    popup3.style.display = 'none';
+    popup2.innerHTML = '';
+    popup3.innerHTML = '';
+    popup2.removeAttribute('data-group');
+    popup3.removeAttribute('data-group');
+  }
+
+  function closeAllDropdowns() {
+    document.querySelectorAll('.dropdown-content').forEach(dd => dd.classList.remove('show'));
+    activeGroupIdx = null;
+  }
+
+  function positionPopup(el, rect) {
+    el.style.top = `${rect.bottom + window.scrollY}px`;
+    el.style.left = `${rect.right + 5 + window.scrollX}px`;
+  }
+
+  /* === 生成一組欄位（含選單） === */
   function createGroup() {
     const idx = groupIndex++;
     const group = document.createElement('div');
@@ -179,6 +201,7 @@
         <div class="level">類別: <span class="text1"></span></div>
         <div class="level">項目: <span class="text2"></span></div>
         <div class="level">序號: <span class="text3"></span></div>
+
         <div class="quantity-wrapper" style="margin-left:20px;">
           數量:
           <select class="quantity-select">
@@ -186,6 +209,7 @@
             ${[...Array(8)].map((_, i) => `<option>${i+1}</option>`).join('')}
           </select>
         </div>
+
         <div class="borrower-wrapper" style="margin-left:20px;">
           借出人:
           <select class="borrower-select">
@@ -195,108 +219,172 @@
             <option>Tim</option>
           </select>
         </div>
+
         <div class="borrow-date-wrapper" style="margin-left:20px;">
           借出日期:
           <input type="text" class="borrow-date" placeholder="請選擇日期" />
         </div>
+
         <div class="return-date-wrapper" style="margin-left:20px;">
           歸還日期:
           <input type="text" class="return-date" placeholder="請選擇日期" />
         </div>
+
         <button class="btnDelete">✖ 刪除欄位</button>
-      </div>`;
+      </div>
+    `;
     container.appendChild(group);
 
-    group.querySelector('.dropbtn').addEventListener('click', e => {
+    // 開關第一層選單（確保二、三層同步關閉，避免殘留）
+    const dropbtn = group.querySelector('.dropbtn');
+    const dropdownContent = group.querySelector('.dropdown-content');
+
+    dropbtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      group.querySelector('.dropdown-content').classList.toggle('show');
-      popup2.style.display = popup3.style.display = 'none';
+
+      // 不論開或關，先把任何彈窗收掉
+      closePopups();
+
+      if (activeGroupIdx !== idx) {
+        // 切到另一個 group：先把其他 dropdown 關掉
+        closeAllDropdowns();
+        activeGroupIdx = idx;
+      }
+
+      // 切換本組第一層的顯示狀態
+      dropdownContent.classList.toggle('show');
+
+      // 若切換後是關閉狀態，清掉 activeGroupIdx，避免狀態錯亂
+      if (!dropdownContent.classList.contains('show')) {
+        activeGroupIdx = null;
+      }
     });
 
+    // 第一層 -> 第二層（點選類別）
     group.querySelectorAll('.dropdown-content span').forEach(span => {
-      span.addEventListener('click', e => {
+      span.addEventListener('click', (e) => {
         e.stopPropagation();
         const level1 = span.dataset.value;
-        const idx = parseInt(span.dataset.group);
-        selections[idx] = { level1, level2: null, level3: null };
-        const rect = span.getBoundingClientRect();
+        const gIdx = parseInt(span.dataset.group, 10);
+        selections[gIdx] = { level1, level2: null, level3: null };
+
+        // 更新顯示
+        group.querySelector('.text1').innerText = level1;
+        group.querySelector('.text2').innerText = '';
+        group.querySelector('.text3').innerText = '';
+
+        // 準備第二層彈窗
         const level2List = categoryMap[level1] || [];
+        if (level2List.length === 0) {
+          // 沒有第二層: 關閉所有彈窗與下拉
+          closePopups();
+          dropdownContent.classList.remove('show');
+          return;
+        }
 
-        popup2.innerHTML = level2List.map(item =>
-          `<a data-group="${idx}" data-value="${item}">${item}</a>`).join('');
-        popup2.style.top = `${rect.bottom + window.scrollY}px`;
-        popup2.style.left = `${rect.right + 5 + window.scrollX}px`;
+        popup2.innerHTML = level2List.map(item => `<a data-group="${gIdx}" data-value="${item}">${item}</a>`).join('');
+        popup2.setAttribute('data-group', gIdx);
+        const rect = span.getBoundingClientRect();
+        positionPopup(popup2, rect);
         popup2.style.display = 'block';
-        popup3.style.display = 'none';
 
-        const groupEl = container.querySelector(`.group[data-idx="${idx}"]`);
-        groupEl.querySelector('.text1').innerText = level1;
-        groupEl.querySelector('.text2').innerText = '';
-        groupEl.querySelector('.text3').innerText = '';
+        // 切到新第二層前先把第三層收掉
+        popup3.style.display = 'none';
+        popup3.innerHTML = '';
+        popup3.removeAttribute('data-group');
       });
     });
 
+    // 刪除本組
     group.querySelector('.btnDelete').addEventListener('click', () => {
+      if (activeGroupIdx === idx) {
+        closeAllDropdowns();
+        closePopups();
+      }
       container.removeChild(group);
       selections[idx] = null;
-      popup2.style.display = popup3.style.display = 'none';
     });
 
-    flatpickr(group.querySelector('.borrow-date'), { dateFormat: "Y-m-d", locale: "zh" });
-    flatpickr(group.querySelector('.return-date'), { dateFormat: "Y-m-d", locale: "zh" });
+    // 初始化日期（若你有載入 flatpickr）
+    if (typeof flatpickr === 'function') {
+      flatpickr(group.querySelector('.borrow-date'), { dateFormat: "Y-m-d", locale: "zh" });
+      flatpickr(group.querySelector('.return-date'), { dateFormat: "Y-m-d", locale: "zh" });
+    }
   }
 
-  popup2.addEventListener('click', e => {
+  /* === 第二層點擊（產生/關閉第三層） === */
+  popup2.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (e.target.tagName === 'A') {
-      const idx = +e.target.dataset.group;
-      const level2 = e.target.dataset.value;
-      selections[idx].level2 = level2;
-      const rect = e.target.getBoundingClientRect();
-      const third = thirdLevelData[level2] || [];
+    if (e.target.tagName !== 'A') return;
 
-      const group = container.querySelector(`.group[data-idx="${idx}"]`);
+    // 先關閉任何舊的第三層
+    popup3.style.display = 'none';
+    popup3.innerHTML = '';
+    popup3.removeAttribute('data-group');
+
+    const idx = +e.target.dataset.group;
+    const level2 = e.target.dataset.value;
+    selections[idx].level2 = level2;
+
+    const group = container.querySelector(`.group[data-idx="${idx}"]`);
+    if (group) {
       group.querySelector('.text2').innerText = level2;
       group.querySelector('.text3').innerText = '';
-
-      if (third.length === 0) {
-        popup2.style.display = 'none';
-        group.querySelector('.dropdown-content').classList.remove('show');
-        return;
-      }
-
-      popup3.innerHTML = third.map(item =>
-        `<a data-group="${idx}" data-value="${item}">${item}</a>`).join('');
-      popup3.style.top = `${rect.bottom + window.scrollY}px`;
-      popup3.style.left = `${rect.right + 5 + window.scrollX}px`;
-      popup3.style.display = 'block';
     }
+
+    const third = thirdLevelData[level2] || [];
+    if (third.length === 0) {
+      // 沒有第三層：關閉第二層彈窗與第一層下拉
+      popup2.style.display = 'none';
+      popup2.innerHTML = '';
+      popup2.removeAttribute('data-group');
+
+      const dd = group?.querySelector('.dropdown-content');
+      dd && dd.classList.remove('show');
+      return;
+    }
+
+    // 有第三層：顯示第三層
+    popup3.innerHTML = third.map(item => `<a data-group="${idx}" data-value="${item}">${item}</a>`).join('');
+    popup3.setAttribute('data-group', idx);
+    const rect = e.target.getBoundingClientRect();
+    positionPopup(popup3, rect);
+    popup3.style.display = 'block';
   });
 
-  popup3.addEventListener('click', e => {
+  /* === 第三層點擊（選定序號） === */
+  popup3.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (e.target.tagName === 'A') {
-      const idx = +e.target.dataset.group;
-      const level3 = e.target.dataset.value;
-      selections[idx].level3 = level3;
+    if (e.target.tagName !== 'A') return;
 
-      const group = container.querySelector(`.group[data-idx="${idx}"]`);
+    const idx = +e.target.dataset.group;
+    const level3 = e.target.dataset.value;
+    selections[idx].level3 = level3;
+
+    const group = container.querySelector(`.group[data-idx="${idx}"]`);
+    if (group) {
       group.querySelector('.text3').innerText = level3;
-
-      popup2.style.display = popup3.style.display = 'none';
-      group.querySelector('.dropdown-content').classList.remove('show');
+      // 關閉所有彈窗與第一層下拉
+      closePopups();
+      const dd = group.querySelector('.dropdown-content');
+      dd && dd.classList.remove('show');
     }
   });
 
+  /* === 全域關閉邏輯 === */
   document.addEventListener('click', () => {
-    document.querySelectorAll('.dropdown-content').forEach(dd => dd.classList.remove('show'));
-    popup2.style.display = popup3.style.display = 'none';
+    closeAllDropdowns();
+    closePopups();
   });
+  window.addEventListener('scroll', () => closePopups(), { passive: true });
+  window.addEventListener('resize', () => closePopups(), { passive: true });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePopups(); });
 
-  document.getElementById('btnAdd').addEventListener('click', createGroup);
+  /* === 新增欄位按鈕與預設一組 === */
+  document.getElementById('btnAdd')?.addEventListener('click', createGroup);
   createGroup();
 
-  /* 主要變更：先上傳雲端，失敗才觸發本機下載；並在上傳期間 disable 按鈕與顯示狀態文字 */
+  /* === 匯出：先上傳雲端，失敗才下載本機；檔名含借方 === */
   document.getElementById('btnExport').addEventListener('click', async () => {
     const btn = document.getElementById('btnExport');
     const originalText = btn.textContent;
@@ -309,30 +397,30 @@
     const children = [
       new Paragraph({
         children: [
-          new TextRun({ text: "Arcanum Advanced Inc.", font: "Microsoft JhengHei UI", size: 20 }),
+          new TextRun({ text: "Arcanum Advanced Inc.", font: "Microsoft JhengHei", size: 20 }),
         ],
         alignment: AlignmentType.RIGHT,
         spacing: { after: 0 },
       }),
       new Paragraph({
         children: [
-          new TextRun({ text: "https://www.arcanum-adv.com", font: "Microsoft JhengHei UI", size: 20 }),
+          new TextRun({ text: "https://www.arcanum-adv.com", font: "Microsoft JhengHei", size: 20 }),
         ],
         alignment: AlignmentType.RIGHT,
         spacing: { after: 300 },
       }),
       new Paragraph({
         children: [
-          new TextRun({ text: '設備借出單', bold: true, font: "Microsoft JhengHei UI", size: 40 })
+          new TextRun({ text: '設備借出單', bold: true, font: "Microsoft JhengHei", size: 40 })
         ],
         spacing: { after: 300 },
         alignment: AlignmentType.CENTER
       })
     ];
 
-    const borrowerName = document.getElementById('borrowerNameInput').value || '______________';
+    const borrowerName = (document.getElementById('borrowerNameInput').value || '').trim() || '______________';
     children.push(new Paragraph({
-      children: [new TextRun({ text: `借方：${borrowerName}`, font: "Microsoft JhengHei UI", size: 32 })],
+      children: [new TextRun({ text: `借方：${borrowerName}`, font: "Microsoft JhengHei", size: 32 })],
       spacing: { after: 200 }
     }));
 
@@ -349,7 +437,7 @@
 
       count++;
 
-      children.push(new Paragraph({ children: [new TextRun({ text: `第 ${count} 項：`, font: "Microsoft JhengHei UI", size: 28 })] }));
+      children.push(new Paragraph({ children: [new TextRun({ text: `第 ${count} 項：`, font: "Microsoft JhengHei", size: 28 })] }));
 
       const line1Parts = [];
       if (sel.level1) line1Parts.push(`類別：${sel.level1}`);
@@ -358,7 +446,7 @@
       if (qty) line1Parts.push(`數量：${qty}`);
 
       children.push(new Paragraph({
-        children: [new TextRun({ text: line1Parts.join('\t'), font: "Microsoft JhengHei UI", size: 28 })]
+        children: [new TextRun({ text: line1Parts.join('\t'), font: "Microsoft JhengHei", size: 28 })]
       }));
 
       const line2Parts = [];
@@ -367,7 +455,7 @@
       if (returnDate) line2Parts.push(`歸還日期：${returnDate}`);
 
       children.push(new Paragraph({
-        children: [new TextRun({ text: line2Parts.join('\t'), font: "Microsoft JhengHei UI", size: 28 })],
+        children: [new TextRun({ text: line2Parts.join('\t'), font: "Microsoft JhengHei", size: 28 })],
         spacing: { after: 300 }
       }));
     });
@@ -386,7 +474,7 @@
         { type: TabStopType.RIGHT, position: 9000 },
       ],
       children: [
-        new TextRun({ text: `\t借方簽章：______________`, font: "Microsoft JhengHei UI", size: 32 }),
+        new TextRun({ text: `\t借方簽章：______________`, font: "Microsoft JhengHei", size: 32 }),
       ],
       spacing: { before: 1000 }
     }));
