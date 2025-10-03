@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -107,7 +107,10 @@
 <script src="https://cdn.jsdelivr.net/npm/docx@7.1.1/build/index.min.js"></script>
 
 <script>
-  const { Document, Packer, Paragraph, TextRun, AlignmentType, TabStopType } = docx;
+  const {
+    Document, Packer, Paragraph, TextRun, AlignmentType, TabStopType,
+    Header, ImageRun, Table, TableRow, TableCell, WidthType, VerticalAlign, BorderStyle
+  } = docx;
 
   /* 上傳設定（使用你的 Web App exec URL 與 TOKEN） */
   const ENDPOINT = 'https://script.google.com/macros/s/AKfycbyMcAeH_ws6L5BISgTa-w84NBDKkPOiN-m9bMqKftKl4Hd4PPSQa-eVFSVvXuMKh2kL/exec';
@@ -239,32 +242,22 @@
     `;
     container.appendChild(group);
 
-    // 開關第一層選單（確保二、三層同步關閉，避免殘留）
+    // 開關第一層選單
     const dropbtn = group.querySelector('.dropbtn');
     const dropdownContent = group.querySelector('.dropdown-content');
 
     dropbtn.addEventListener('click', (e) => {
       e.stopPropagation();
-
-      // 不論開或關，先把任何彈窗收掉
       closePopups();
-
       if (activeGroupIdx !== idx) {
-        // 切到另一個 group：先把其他 dropdown 關掉
         closeAllDropdowns();
         activeGroupIdx = idx;
       }
-
-      // 切換本組第一層的顯示狀態
       dropdownContent.classList.toggle('show');
-
-      // 若切換後是關閉狀態，清掉 activeGroupIdx，避免狀態錯亂
-      if (!dropdownContent.classList.contains('show')) {
-        activeGroupIdx = null;
-      }
+      if (!dropdownContent.classList.contains('show')) activeGroupIdx = null;
     });
 
-    // 第一層 -> 第二層（點選類別）
+    // 第一層 -> 第二層
     group.querySelectorAll('.dropdown-content span').forEach(span => {
       span.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -272,15 +265,12 @@
         const gIdx = parseInt(span.dataset.group, 10);
         selections[gIdx] = { level1, level2: null, level3: null };
 
-        // 更新顯示
         group.querySelector('.text1').innerText = level1;
         group.querySelector('.text2').innerText = '';
         group.querySelector('.text3').innerText = '';
 
-        // 準備第二層彈窗
         const level2List = categoryMap[level1] || [];
         if (level2List.length === 0) {
-          // 沒有第二層: 關閉所有彈窗與下拉
           closePopups();
           dropdownContent.classList.remove('show');
           return;
@@ -292,7 +282,6 @@
         positionPopup(popup2, rect);
         popup2.style.display = 'block';
 
-        // 切到新第二層前先把第三層收掉
         popup3.style.display = 'none';
         popup3.innerHTML = '';
         popup3.removeAttribute('data-group');
@@ -309,19 +298,18 @@
       selections[idx] = null;
     });
 
-    // 初始化日期（若你有載入 flatpickr）
+    // 初始化日期
     if (typeof flatpickr === 'function') {
       flatpickr(group.querySelector('.borrow-date'), { dateFormat: "Y-m-d", locale: "zh" });
       flatpickr(group.querySelector('.return-date'), { dateFormat: "Y-m-d", locale: "zh" });
     }
   }
 
-  /* === 第二層點擊（產生/關閉第三層） === */
+  /* === 第二層點擊 === */
   popup2.addEventListener('click', (e) => {
     e.stopPropagation();
     if (e.target.tagName !== 'A') return;
 
-    // 先關閉任何舊的第三層
     popup3.style.display = 'none';
     popup3.innerHTML = '';
     popup3.removeAttribute('data-group');
@@ -338,17 +326,14 @@
 
     const third = thirdLevelData[level2] || [];
     if (third.length === 0) {
-      // 沒有第三層：關閉第二層彈窗與第一層下拉
       popup2.style.display = 'none';
       popup2.innerHTML = '';
       popup2.removeAttribute('data-group');
-
       const dd = group?.querySelector('.dropdown-content');
       dd && dd.classList.remove('show');
       return;
     }
 
-    // 有第三層：顯示第三層
     popup3.innerHTML = third.map(item => `<a data-group="${idx}" data-value="${item}">${item}</a>`).join('');
     popup3.setAttribute('data-group', idx);
     const rect = e.target.getBoundingClientRect();
@@ -356,7 +341,7 @@
     popup3.style.display = 'block';
   });
 
-  /* === 第三層點擊（選定序號） === */
+  /* === 第三層點擊 === */
   popup3.addEventListener('click', (e) => {
     e.stopPropagation();
     if (e.target.tagName !== 'A') return;
@@ -368,7 +353,6 @@
     const group = container.querySelector(`.group[data-idx="${idx}"]`);
     if (group) {
       group.querySelector('.text3').innerText = level3;
-      // 關閉所有彈窗與第一層下拉
       closePopups();
       const dd = group.querySelector('.dropdown-content');
       dd && dd.classList.remove('show');
@@ -388,43 +372,86 @@
   document.getElementById('btnAdd')?.addEventListener('click', createGroup);
   createGroup();
 
-  /* === 匯出：先上傳雲端，失敗才下載本機；檔名含借方 === */
+  /* === 匯出：用 Header 表格 + 白色邊框；標題在正文；先上傳雲端，失敗才下載本機 === */
   document.getElementById('btnExport').addEventListener('click', async () => {
     const btn = document.getElementById('btnExport');
     const originalText = btn.textContent;
 
-    // 避免重複點擊
     btn.disabled = true;
     btn.textContent = '上傳中...';
 
-    // 建立 doc 內容
-    const children = [
-      new Paragraph({
-        children: [
-          new TextRun({ text: "Arcanum Advanced Inc.", font: "Microsoft JhengHei", size: 20 }),
-        ],
-        alignment: AlignmentType.RIGHT,
-        spacing: { after: 0 },
+    // 讀 LOGO（GitHub raw）
+    const logoUrl = 'https://raw.githubusercontent.com/lalu561/Equipment-loan-form/main/Arcanum%20logo.png';
+    let logoArrayBuffer = null;
+    try {
+      const resp = await fetch(logoUrl);
+      if (!resp.ok) throw new Error(`Logo 載入失敗：HTTP ${resp.status}`);
+      logoArrayBuffer = await resp.arrayBuffer();
+    } catch (e) {
+      console.warn('Logo 載入失敗', e);
+    }
+
+    // ===== Header：左 LOGO、右公司資訊（白色邊框、齊貼頁首下緣） =====
+    const whiteBorders = {
+      top: { style: BorderStyle.SINGLE, size: 0, color: "FFFFFF" },
+      bottom: { style: BorderStyle.SINGLE, size: 0, color: "FFFFFF" },
+      left: { style: BorderStyle.SINGLE, size: 0, color: "FFFFFF" },
+      right: { style: BorderStyle.SINGLE, size: 0, color: "FFFFFF" },
+      insideH: { style: BorderStyle.SINGLE, size: 0, color: "FFFFFF" },
+      insideV: { style: BorderStyle.SINGLE, size: 0, color: "FFFFFF" }
+    };
+
+    const headerCells = [
+      new TableCell({
+        children: logoArrayBuffer ? [
+          new Paragraph({
+            children: [ new ImageRun({ data: logoArrayBuffer, transformation: { width: 150, height: 60 } }) ],
+            alignment: AlignmentType.LEFT,
+            spacing: { before: 0, after: 0 }
+          })
+        ] : [],
+        verticalAlign: VerticalAlign.BOTTOM,
+        borders: whiteBorders,
+        width: { size: 50, type: WidthType.PERCENTAGE }
       }),
-      new Paragraph({
+      new TableCell({
         children: [
-          new TextRun({ text: "https://www.arcanum-adv.com", font: "Microsoft JhengHei", size: 20 }),
+          new Paragraph({
+            children: [new TextRun({ text: "Arcanum Advanced Inc.", size: 20 })],
+            alignment: AlignmentType.RIGHT,
+            spacing: { before: 0, after: 0 }
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: "https://www.arcanum-adv.com", size: 20 })],
+            alignment: AlignmentType.RIGHT,
+            spacing: { before: 0, after: 0 }
+          })
         ],
-        alignment: AlignmentType.RIGHT,
-        spacing: { after: 300 },
-      }),
-      new Paragraph({
-        children: [
-          new TextRun({ text: '設備借出單', bold: true, font: "Microsoft JhengHei", size: 40 })
-        ],
-        spacing: { after: 300 },
-        alignment: AlignmentType.CENTER
+        verticalAlign: VerticalAlign.BOTTOM,
+        borders: whiteBorders,
+        width: { size: 50, type: WidthType.PERCENTAGE }
       })
     ];
 
+    const headerTable = new Table({
+      rows: [ new TableRow({ children: headerCells }) ],
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: whiteBorders
+    });
+
+    // ===== 正文：標題 + 借方 + 清單 =====
+    const children = [];
+
+    // 標題在正文（上方空一行）
+    children.push(new Paragraph({
+      children: [new TextRun({ text: '設備借出單', bold: true, size: 40 })],
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 276, after: 300 }
+    }));
+
     const borrowerName = (document.getElementById('borrowerNameInput').value || '').trim() || '______________';
     children.push(new Paragraph({
-      children: [new TextRun({ text: `借方：${borrowerName}`, font: "Microsoft JhengHei", size: 32 })],
+      children: [new TextRun({ text: `借方：${borrowerName}`, size: 32 })],
       spacing: { after: 200 }
     }));
 
@@ -441,7 +468,7 @@
 
       count++;
 
-      children.push(new Paragraph({ children: [new TextRun({ text: `第 ${count} 項：`, font: "Microsoft JhengHei", size: 28 })] }));
+      children.push(new Paragraph({ children: [new TextRun({ text: `第 ${count} 項：`, size: 28 })] }));
 
       const line1Parts = [];
       if (sel.level1) line1Parts.push(`類別：${sel.level1}`);
@@ -450,7 +477,7 @@
       if (qty) line1Parts.push(`數量：${qty}`);
 
       children.push(new Paragraph({
-        children: [new TextRun({ text: line1Parts.join('\t'), font: "Microsoft JhengHei", size: 28 })]
+        children: [new TextRun({ text: line1Parts.join('\t'), size: 28 })]
       }));
 
       const line2Parts = [];
@@ -459,7 +486,7 @@
       if (returnDate) line2Parts.push(`歸還日期：${returnDate}`);
 
       children.push(new Paragraph({
-        children: [new TextRun({ text: line2Parts.join('\t'), font: "Microsoft JhengHei", size: 28 })],
+        children: [new TextRun({ text: line2Parts.join('\t'), size: 28 })],
         spacing: { after: 300 }
       }));
     });
@@ -478,11 +505,12 @@
         { type: TabStopType.RIGHT, position: 9000 },
       ],
       children: [
-        new TextRun({ text: `\t借方簽章：______________`, font: "Microsoft JhengHei", size: 32 }),
+        new TextRun({ text: `\t借方簽章：______________`, size: 32 }),
       ],
       spacing: { before: 1000 }
     }));
 
+    // ===== 建立文件：中等邊界 + header 高度貼齊 LOGO 下緣 =====
     const doc = new Document({
       creator: "系統",
       title: "設備借出清單",
@@ -495,7 +523,18 @@
           }
         }
       },
-      sections: [{ properties: {}, children }]
+      sections: [{
+        properties: {
+          page: {
+            margin: {
+              top: 1440, right: 1440, bottom: 1440, left: 1440,
+              header: 850 // 約略對應 LOGO 高度，讓下緣貼齊分隔線
+            }
+          }
+        },
+        headers: { default: new Header({ children: [headerTable] }) },
+        children
+      }]
     });
 
     const today = new Date();
@@ -505,7 +544,7 @@
     const fileName = `設備借出單_${safeBorrower}_${formattedDate}.docx`;
 
     try {
-      // 先嘗試上傳雲端（成功就不下載）
+      // 先上傳雲端
       const result = await uploadDocx(doc, fileName);
       alert('已上傳到雲端！檔案ID：' + result.docxId);
     } catch (err) {
@@ -518,7 +557,6 @@
       a.click();
       alert('上傳失敗，已改為下載本機：' + err.message);
     } finally {
-      // 還原按鈕狀態
       btn.disabled = false;
       btn.textContent = originalText;
     }
@@ -526,6 +564,3 @@
 </script>
 </body>
 </html>
-
-
-
